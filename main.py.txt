@@ -1,0 +1,83 @@
+from flask import Flask, render_template, request, g
+import sqlite3
+
+app = Flask(__name__)
+DATABASE = 'identifier.sqlite'
+
+
+def get_db():
+    db = getattr(g, '_database', None)
+    if db is None:
+        db = g._database = sqlite3.connect(DATABASE)
+    db.row_factory = sqlite3.Row
+    return db
+
+
+@app.teardown_appcontext
+def close_connection(exception):
+    db = getattr(g, '_database', None)
+    if db is not None:
+        db.close()
+
+
+def generate_workout_based_suggestions(workouts):
+    if not workouts:
+        return ['Start light workouts', 'Try daily walks', 'Build a consistent schedule']
+
+    total_sessions = len(workouts)
+    total_duration = sum(workout['duration'] for workout in workouts)
+    unique_types = set(workout['workout_type'] for workout in workouts)
+    avg_duration = total_duration / total_sessions if total_sessions else 0
+
+    suggestions = []
+
+    if total_sessions >= 5:
+        suggestions.append('Great consistency! Try advanced workouts or increase intensity.')
+    elif 3 <= total_sessions < 5:
+        suggestions.append('You’re doing well. Aim for 5 sessions a week.')
+    else:
+        suggestions.append('Increase your weekly workout sessions for better results.')
+
+    if avg_duration >= 45:
+        suggestions.append('Consider balancing long workouts with recovery routines.')
+    elif avg_duration < 20:
+        suggestions.append('Try increasing your workout duration for more impact.')
+
+    if len(unique_types) < 2:
+        suggestions.append('Incorporate variety (e.g., cardio + strength + flexibility).')
+    else:
+        suggestions.append('Good variety! Keep it up.')
+
+    return suggestions
+
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    db = get_db()
+    users = db.execute("SELECT user_id, name FROM Users").fetchall()
+
+    selected_user = None
+    suggestions = []
+    workouts = []
+
+    if request.method == 'POST':
+        user_id = request.form.get('user_id')
+        if user_id:
+            selected_user = db.execute("SELECT name FROM Users WHERE user_id = ?", (user_id,)).fetchone()
+
+            workouts = db.execute("""
+                SELECT workout_type, duration, calories_burned, date
+                FROM WorkoutSessions
+                WHERE user_id = ?
+                ORDER BY date DESC
+                LIMIT 10
+            """, (user_id,)).fetchall()
+
+            suggestions = generate_workout_based_suggestions(workouts)
+
+    return render_template('index.html', users=users, selected_user=selected_user,
+                           suggestions=suggestions, workouts=workouts)
+
+
+if __name__ == '__main__':
+    app.run(debug=True)
